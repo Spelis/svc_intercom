@@ -1,0 +1,18 @@
+name: svc_intercom
+version: '1.0'
+main: eu.projnull.spelis.svci.Intercom
+api-version: '1.21'
+prefix: SVCIntercom
+load: POSTWORLD
+authors: [ Spelis ]
+description: Intercom (global broadcast) to Simple Voice Chat
+website: https://spelis.projnull.eu
+
+depend: [ voicechat ]
+
+commands:
+  intercom:
+    description: Manage intercom broadcasts
+    usage: /intercom <file|live|stop> ...
+    permission: svcintercom.broadcast
+    permission-message: You do not have permission to use the intercom.
