@@ -75,6 +75,7 @@ public final class BroadcasterState {
         private final UUID playerId;      // null for FILE mode
         private final UUID worldId;
         private final BroadcastType type;
+        private final BroadcastMode mode; // GLOBAL or SPEAKER
         private final long endTimeMillis;
         private final String fileName;    // only for FILE mode
 
@@ -82,6 +83,7 @@ public final class BroadcasterState {
                 UUID playerId,
                 UUID worldId,
                 BroadcastType type,
+                BroadcastMode mode,
                 long durationMillis,
                 String fileName
         ) {
@@ -97,9 +99,13 @@ public final class BroadcasterState {
             if (type == BroadcastType.FILE && fileName == null)
                 throw new IllegalArgumentException("FILE requires fileName");
 
+            if (mode == null)
+                throw new IllegalArgumentException("mode cannot be null");
+
             this.playerId = playerId;
             this.worldId = worldId;
             this.type = type;
+            this.mode = mode;
             this.endTimeMillis = System.currentTimeMillis() + durationMillis;
             this.fileName = fileName;
         }
@@ -128,9 +134,18 @@ public final class BroadcasterState {
             return endTimeMillis;
         }
 
+        public BroadcastMode getMode() {
+            return mode;
+        }
+
         public enum BroadcastType {
             LIVE,
             FILE
+        }
+
+        public enum BroadcastMode {
+            GLOBAL,   // Everyone hears equally, ignores speakers
+            SPEAKER   // Only audible near speakers
         }
     }
 }

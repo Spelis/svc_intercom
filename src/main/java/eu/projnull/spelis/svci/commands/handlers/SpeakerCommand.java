@@ -33,6 +33,74 @@ public class SpeakerCommand implements Handler {
         return Commands.literal("add")
                 .requires(cs -> cs.getSender().hasPermission("svcintercom.speaker.add"))
                 .then(Commands.argument("name", StringArgumentType.word())
+                        // Option 1: Just name and range - uses player's current location
+                        .then(Commands.argument("range", DoubleArgumentType.doubleArg(1.0, 1000.0))
+                                .executes(ctx -> {
+                                    CommandSender sender = ctx.getSource().getSender();
+                                    if (!(sender instanceof Player player)) {
+                                        sender.sendMessage("§cYou must be a player to add a speaker at your location");
+                                        return 0;
+                                    }
+
+                                    String name = StringArgumentType.getString(ctx, "name");
+                                    double range = DoubleArgumentType.getDouble(ctx, "range");
+
+                                    Location loc = player.getLocation();
+                                    World world = loc.getWorld();
+                                    UUID worldId = world.getUID();
+
+                                    if (SpeakerManager.inst().speakerExists(worldId, name)) {
+                                        sender.sendMessage("§cA speaker named '§f" + name + "§c' already exists in this world");
+                                        return 0;
+                                    }
+
+                                    Speaker speaker = new Speaker(worldId, loc.getX(), loc.getY(), loc.getZ(), range, name);
+                                    SpeakerManager.inst().addSpeaker(speaker);
+
+                                    sender.sendMessage("§aAdded speaker at your location: §f" + speaker.toString());
+                                    return 1;
+                                })
+                                // Option 2: name, range, and world - uses player coords in specified world
+                                .then(Commands.argument("world", StringArgumentType.word())
+                                        .suggests((ctx, builder) -> {
+                                            Helpers.getAllWorldsSuggestion(builder);
+                                            return builder.buildFuture();
+                                        })
+                                        .executes(ctx -> {
+                                            CommandSender sender = ctx.getSource().getSender();
+                                            if (!(sender instanceof Player player)) {
+                                                sender.sendMessage("§cYou must be a player to use coordinates from your location");
+                                                return 0;
+                                            }
+
+                                            String name = StringArgumentType.getString(ctx, "name");
+                                            double range = DoubleArgumentType.getDouble(ctx, "range");
+                                            String worldName = StringArgumentType.getString(ctx, "world");
+
+                                            World world = Bukkit.getWorld(worldName);
+                                            if (world == null) {
+                                                sender.sendMessage("§cWorld not found: §f" + worldName);
+                                                return 0;
+                                            }
+
+                                            Location loc = player.getLocation();
+                                            UUID worldId = world.getUID();
+
+                                            if (SpeakerManager.inst().speakerExists(worldId, name)) {
+                                                sender.sendMessage("§cA speaker named '§f" + name + "§c' already exists in world §f" + worldName);
+                                                return 0;
+                                            }
+
+                                            // Use player's X, Y, Z but in the specified world
+                                            Speaker speaker = new Speaker(worldId, loc.getX(), loc.getY(), loc.getZ(), range, name);
+                                            SpeakerManager.inst().addSpeaker(speaker);
+
+                                            sender.sendMessage("§aAdded speaker in world §f" + worldName + "§a: " + speaker.toString());
+                                            return 1;
+                                        })
+                                )
+                        )
+                        // Option 3: Full specification with world and coordinates
                         .then(Commands.argument("world", StringArgumentType.word())
                                 .suggests((ctx, builder) -> {
                                     Helpers.getAllWorldsSuggestion(builder);
@@ -53,13 +121,13 @@ public class SpeakerCommand implements Handler {
 
                                                                     World world = Bukkit.getWorld(worldName);
                                                                     if (world == null) {
-                                                                        sender.sendMessage("§cWorld not found: " + worldName);
+                                                                        sender.sendMessage("§cWorld not found: §f" + worldName);
                                                                         return 0;
                                                                     }
 
                                                                     UUID worldId = world.getUID();
                                                                     if (SpeakerManager.inst().speakerExists(worldId, name)) {
-                                                                        sender.sendMessage("§cA speaker with that name already exists in this world");
+                                                                        sender.sendMessage("§cA speaker named '§f" + name + "§c' already exists in world §f" + worldName);
                                                                         return 0;
                                                                     }
 
@@ -73,34 +141,6 @@ public class SpeakerCommand implements Handler {
                                                 )
                                         )
                                 )
-                        )
-                        // Add shorthand for current location (player only)
-                        .then(Commands.argument("range", DoubleArgumentType.doubleArg(1.0, 1000.0))
-                                .executes(ctx -> {
-                                    CommandSender sender = ctx.getSource().getSender();
-                                    if (!(sender instanceof Player player)) {
-                                        sender.sendMessage("§cYou must be a player to use this command without coordinates");
-                                        return 0;
-                                    }
-
-                                    String name = StringArgumentType.getString(ctx, "name");
-                                    double range = DoubleArgumentType.getDouble(ctx, "range");
-
-                                    Location loc = player.getLocation();
-                                    World world = loc.getWorld();
-                                    UUID worldId = world.getUID();
-
-                                    if (SpeakerManager.inst().speakerExists(worldId, name)) {
-                                        sender.sendMessage("§cA speaker with that name already exists in this world");
-                                        return 0;
-                                    }
-
-                                    Speaker speaker = new Speaker(worldId, loc.getX(), loc.getY(), loc.getZ(), range, name);
-                                    SpeakerManager.inst().addSpeaker(speaker);
-
-                                    sender.sendMessage("§aAdded speaker: §f" + speaker.toString());
-                                    return 1;
-                                })
                         )
                 );
     }
