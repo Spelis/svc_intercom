@@ -59,22 +59,27 @@ public class VoicePlugin implements VoicechatPlugin {
 
         VoicechatServerApi api = event.getVoicechat();
 
-        // Get all speakers in this world
-        java.util.List<Speaker> speakers = SpeakerManager.inst().getSpeakers(worldId);
-        
-        if (speakers.isEmpty()) {
-            // Fallback to old behavior if no speakers are defined
+        // Check broadcast mode
+        if (broadcaster.getMode() == BroadcasterState.Broadcaster.BroadcastMode.GLOBAL) {
+            // Global broadcast - everyone hears equally, no speakers
             for (org.bukkit.entity.Player online : player.getWorld().getPlayers()) {
                 if (online.getUniqueId().equals(player.getUniqueId())) {
                     continue;
                 }
 
                 VoicechatConnection connection = api.getConnectionOf(online.getUniqueId());
-
                 if (connection == null) continue;
 
                 api.sendStaticSoundPacketTo(connection, event.getPacket().toStaticSoundPacket());
             }
+            return;
+        }
+
+        // Speaker broadcast - use positional audio from speakers
+        java.util.List<Speaker> speakers = SpeakerManager.inst().getSpeakers(worldId);
+        
+        if (speakers.isEmpty()) {
+            // No speakers but speaker mode - no audio will be heard
             return;
         }
 

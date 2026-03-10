@@ -2,6 +2,7 @@ package eu.projnull.spelis.svci.commands.handlers;
 
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.builder.ArgumentBuilder;
+import com.mojang.brigadier.context.CommandContext;
 import de.maxhenkel.voicechat.api.VoicechatConnection;
 import de.maxhenkel.voicechat.api.VoicechatServerApi;
 import de.maxhenkel.voicechat.api.audiochannel.AudioPlayer;
@@ -11,6 +12,7 @@ import eu.projnull.spelis.svci.commands.Handler;
 import eu.projnull.spelis.svci.commands.Helpers;
 import eu.projnull.spelis.svci.misc.OggDecoder;
 import eu.projnull.spelis.svci.voice.BroadcasterState;
+import eu.projnull.spelis.svci.voice.SpeakerManager;
 import io.papermc.paper.command.brigadier.CommandSourceStack;
 import io.papermc.paper.command.brigadier.Commands;
 import org.bukkit.Bukkit;
@@ -25,110 +27,167 @@ import java.util.UUID;
 public class FileCommand implements Handler {
     @Override
     public ArgumentBuilder<CommandSourceStack, ?> buildCommand() {
-        return Commands.literal("file").requires(cs->cs.getSender().hasPermission("svcintercom.broadcast.start")).then(Commands.argument("filename", StringArgumentType.string()).suggests((ctx, builder) -> {
-            Helpers.getAllSoundsSuggestion(builder);
-            return builder.buildFuture();
-        }).then(Commands.argument("world", StringArgumentType.word()).suggests((ctx, builder) -> {
-            Helpers.getAllWorldsSuggestion(builder);
-            return builder.buildFuture();
-        }).executes(ctx -> {
-            CommandSourceStack source = ctx.getSource();
-            CommandSender sender = source.getSender();
-            String filename = StringArgumentType.getString(ctx, "filename");
-            World world = Bukkit.getWorld(StringArgumentType.getString(ctx, "world"));
+        return Commands.literal("file")
+                .requires(cs -> cs.getSender().hasPermission("svcintercom.broadcast.start"))
+                .then(Commands.argument("filename", StringArgumentType.string())
+                        .suggests((ctx, builder) -> {
+                            Helpers.getAllSoundsSuggestion(builder);
+                            return builder.buildFuture();
+                        })
+                        .then(Commands.argument("world", StringArgumentType.word())
+                                .suggests((ctx, builder) -> {
+                                    Helpers.getAllWorldsSuggestion(builder);
+                                    return builder.buildFuture();
+                                })
+                                // With optional mode parameter
+                                .then(Commands.argument("mode", StringArgumentType.word())
+                                        .suggests((ctx, builder) -> {
+                                            builder.suggest("global");
+                                            builder.suggest("speaker");
+                                            return builder.buildFuture();
+                                        })
+                                        .executes(ctx -> executeFileBroadcast(ctx, true))
+                                )
+                                // Without mode parameter (auto-detect)
+                                .executes(ctx -> executeFileBroadcast(ctx, false))
+                        )
+                );
+    }
 
-            if (world == null) {
-                sender.sendMessage("§cWorld not found.");
+    private int executeFileBroadcast(CommandContext<CommandSourceStack> ctx, boolean hasMode) {
+        CommandSourceStack source = ctx.getSource();
+        CommandSender sender = source.getSender();
+        String filename = StringArgumentType.getString(ctx, "filename");
+        World world = Bukkit.getWorld(StringArgumentType.getString(ctx, "world"));
+
+        if (world == null) {
+            sender.sendMessage("§cWorld not found.");
+            return 0;
+        }
+
+        if (BroadcasterState.inst().isBroadcastActive(world.getUID())) {
+            sender.sendMessage("§cA broadcast is already active in this world.");
+            return 0;
+        }
+
+        File soundFile = new File(Intercom.getPlugin(Intercom.class).getDataFolder(), "sounds/" + filename);
+        if (!soundFile.exists()) {
+            Intercom.LOGGER.warn("File not found: {}", soundFile.getAbsoluteFile());
+            sender.sendMessage("§cFile not found.");
+            return 0;
+        }
+
+        // Determine broadcast mode
+        BroadcasterState.Broadcaster.BroadcastMode mode;
+        if (hasMode) {
+            String modeStr = StringArgumentType.getString(ctx, "mode").toLowerCase();
+            if (modeStr.equals("global")) {
+                mode = BroadcasterState.Broadcaster.BroadcastMode.GLOBAL;
+            } else if (modeStr.equals("speaker")) {
+                mode = BroadcasterState.Broadcaster.BroadcastMode.SPEAKER;
+            } else {
+                sender.sendMessage("§cInvalid mode. Use 'global' or 'speaker'");
                 return 0;
             }
+        } else {
+            // Auto-detect: use speaker mode if speakers exist, otherwise global
+            boolean hasSpeakers = !SpeakerManager.inst().getSpeakers(world.getUID()).isEmpty();
+            mode = hasSpeakers ? BroadcasterState.Broadcaster.BroadcastMode.SPEAKER : BroadcasterState.Broadcaster.BroadcastMode.GLOBAL;
+        }
 
-            if (BroadcasterState.inst().isBroadcastActive(world.getUID())) {
-                sender.sendMessage("§cA broadcast is already active in this world.");
-                return 0;
+        // Warn if speaker mode selected but no speakers exist
+        if (mode == BroadcasterState.Broadcaster.BroadcastMode.SPEAKER) {
+            if (SpeakerManager.inst().getSpeakers(world.getUID()).isEmpty()) {
+                sender.sendMessage("§eWarning: Speaker mode selected but no speakers exist in this world. No one will hear the broadcast!");
+            }
+        }
+
+        final BroadcasterState.Broadcaster.BroadcastMode finalMode = mode;
+
+        Bukkit.getScheduler().runTaskAsynchronously(Intercom.getPlugin(Intercom.class), () -> {
+            short[] pcm;
+            try {
+                pcm = OggDecoder.decode(soundFile);
+            } catch (Exception e) {
+                sender.sendMessage("§cFailed to decode file.");
+                Intercom.LOGGER.warn("Failed to decode file: {}", e.getMessage());
+                return;
             }
 
-            File soundFile = new File(Intercom.getPlugin(Intercom.class).getDataFolder(), "sounds/" + filename);
-            if (!soundFile.exists()) {
-                Intercom.LOGGER.warn("File not found: {}", soundFile.getAbsoluteFile());
-                sender.sendMessage("§cFile not found.");
-                return 0;
-            }
+            long durationMillis = pcm.length / 48L;
 
-            Bukkit.getScheduler().runTaskAsynchronously(Intercom.getPlugin(Intercom.class), () -> {
-                short[] pcm;
-                try {
-                    pcm = OggDecoder.decode(soundFile);
-                } catch (Exception e) {
-                    sender.sendMessage("§cFailed to decode file.");
-                    Intercom.LOGGER.warn("File not found: {}", e.getMessage());
+            Bukkit.getScheduler().runTask(Intercom.getPlugin(Intercom.class), () -> {
+                if (BroadcasterState.inst().isBroadcastActive(world.getUID())) {
+                    sender.sendMessage("§cA broadcast is already active!");
                     return;
                 }
 
-                long durationMillis = pcm.length / 48L;
+                VoicechatServerApi api = Objects.requireNonNull(Intercom.getPlugin(Intercom.class).getVoicechatPlugin()).getVoicechatServerApi();
+                if (api == null) {
+                    sender.sendMessage("§cSimple Voice Chat API not available.");
+                    return;
+                }
 
-                Bukkit.getScheduler().runTask(Intercom.getPlugin(Intercom.class), () -> {
-                    if (BroadcasterState.inst().isBroadcastActive(world.getUID())) {
-                        sender.sendMessage("§cA broadcast is already active!");
-                        return;
+                de.maxhenkel.voicechat.api.ServerLevel level = api.fromServerLevel(world);
+
+                BroadcasterState.Broadcaster broadcaster = new BroadcasterState.Broadcaster(
+                        null,
+                        world.getUID(),
+                        BroadcasterState.Broadcaster.BroadcastType.FILE,
+                        finalMode,
+                        durationMillis,
+                        filename
+                );
+                BroadcasterState.inst().startBroadcast(broadcaster);
+
+                if (finalMode == BroadcasterState.Broadcaster.BroadcastMode.GLOBAL) {
+                    // Global broadcast - everyone hears equally
+                    for (Player p : world.getPlayers()) {
+                        VoicechatConnection connection = api.getConnectionOf(p.getUniqueId());
+                        if (connection == null) continue;
+
+                        StaticAudioChannel channel = api.createStaticAudioChannel(UUID.randomUUID(), level, connection);
+                        if (channel == null) continue;
+
+                        AudioPlayer audioPlayer = api.createAudioPlayer(channel, api.createEncoder(), pcm);
+                        audioPlayer.startPlaying();
                     }
-
-                    VoicechatServerApi api = Objects.requireNonNull(Intercom.getPlugin(Intercom.class).getVoicechatPlugin()).getVoicechatServerApi();
-                    if (api == null) {
-                        sender.sendMessage("§cSimple Voice Chat API not available.");
-                        return;
-                    }
-
-                    de.maxhenkel.voicechat.api.ServerLevel level = api.fromServerLevel(world);
-
-                    BroadcasterState.Broadcaster broadcaster = new BroadcasterState.Broadcaster(null, world.getUID(), BroadcasterState.Broadcaster.BroadcastType.FILE, durationMillis, filename);
-                    BroadcasterState.inst().startBroadcast(broadcaster);
-
-                    // Get all speakers in this world
-                    java.util.List<eu.projnull.spelis.svci.voice.Speaker> speakers = eu.projnull.spelis.svci.voice.SpeakerManager.inst().getSpeakers(world.getUID());
+                    sender.sendMessage("§aFile broadcast started: §f" + filename + " §ain §f" + world.getName() + " §7(global)");
+                } else {
+                    // Speaker broadcast - positional audio from speakers
+                    java.util.List<eu.projnull.spelis.svci.voice.Speaker> speakers = SpeakerManager.inst().getSpeakers(world.getUID());
                     
-                    if (speakers.isEmpty()) {
-                        // Fallback to old behavior if no speakers are defined
-                        for (Player p : world.getPlayers()) {
-                            VoicechatConnection connection = api.getConnectionOf(p.getUniqueId());
-                            if (connection == null) continue;
+                    for (eu.projnull.spelis.svci.voice.Speaker speaker : speakers) {
+                        org.bukkit.Location speakerLoc = speaker.getLocation();
+                        if (speakerLoc == null) continue;
 
-                            StaticAudioChannel channel = api.createStaticAudioChannel(UUID.randomUUID(), level, connection);
-                            if (channel == null) continue;
+                        de.maxhenkel.voicechat.api.Position position = api.createPosition(
+                                speakerLoc.getX(),
+                                speakerLoc.getY(),
+                                speakerLoc.getZ()
+                        );
 
-                            AudioPlayer audioPlayer = api.createAudioPlayer(channel, api.createEncoder(), pcm);
-                            audioPlayer.startPlaying();
-                        }
-                        sender.sendMessage("§aFile broadcast started: §f" + filename + " §ain §f" + world.getName() + " §7(no speakers, using global audio)");
-                    } else {
-                        // Use positional audio from speakers
-                        for (eu.projnull.spelis.svci.voice.Speaker speaker : speakers) {
-                            org.bukkit.Location speakerLoc = speaker.getLocation();
-                            if (speakerLoc == null) continue;
+                        de.maxhenkel.voicechat.api.audiochannel.LocationalAudioChannel channel = 
+                                api.createLocationalAudioChannel(UUID.randomUUID(), level, position);
+                        
+                        if (channel == null) continue;
 
-                            de.maxhenkel.voicechat.api.Position position = api.createPosition(
-                                    speakerLoc.getX(),
-                                    speakerLoc.getY(),
-                                    speakerLoc.getZ()
-                            );
+                        channel.setDistance((float) speaker.getRange());
 
-                            de.maxhenkel.voicechat.api.audiochannel.LocationalAudioChannel channel = 
-                                    api.createLocationalAudioChannel(UUID.randomUUID(), level, position);
-                            
-                            if (channel == null) continue;
-
-                            channel.setDistance((float) speaker.getRange());
-
-                            AudioPlayer audioPlayer = api.createAudioPlayer(channel, api.createEncoder(), pcm);
-                            audioPlayer.startPlaying();
-                        }
-                        sender.sendMessage("§aFile broadcast started: §f" + filename + " §ain §f" + world.getName() + " §7(" + speakers.size() + " speakers)");
+                        AudioPlayer audioPlayer = api.createAudioPlayer(channel, api.createEncoder(), pcm);
+                        audioPlayer.startPlaying();
                     }
+                    sender.sendMessage("§aFile broadcast started: §f" + filename + " §ain §f" + world.getName() + " §7(" + speakers.size() + " speakers)");
+                }
 
-                    Bukkit.getScheduler().runTaskLaterAsynchronously(Intercom.getPlugin(Intercom.class), () -> BroadcasterState.inst().stopBroadcastWithMessage(world.getUID(), "§aThe broadcast has ended."), durationMillis / 50L);
-                });
+                Bukkit.getScheduler().runTaskLaterAsynchronously(
+                        Intercom.getPlugin(Intercom.class),
+                        () -> BroadcasterState.inst().stopBroadcastWithMessage(world.getUID(), "§aThe broadcast has ended."),
+                        durationMillis / 50L
+                );
             });
+        });
 
-            return 1;
-        })));
+        return 1;
     }
 }
